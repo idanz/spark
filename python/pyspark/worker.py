@@ -23,6 +23,9 @@ import sys
 import time
 import socket
 import traceback
+import zipfile
+import subprocess
+import random
 # CloudPickler needs to be imported so that depicklers are registered using the
 # copy_reg module.
 from pyspark.accumulators import _accumulatorRegistry
@@ -31,7 +34,8 @@ from pyspark.cloudpickle import CloudPickler
 from pyspark.files import SparkFiles
 from pyspark.serializers import write_with_length, write_int, read_long, \
     write_long, read_int, SpecialLengths, UTF8Deserializer, PickleSerializer
-
+import tempfile
+from file_locks import FileLock
 
 pickleSer = PickleSerializer()
 utf8_deserializer = UTF8Deserializer()
@@ -61,7 +65,29 @@ def main(infile, outfile):
         num_python_includes =  read_int(infile)
         for _ in range(num_python_includes):
             filename = utf8_deserializer.loads(infile)
-            sys.path.append(os.path.join(spark_files_dir, filename))
+            #with zipfile.ZipFile(os.path.join(spark_files_dir, filename)) as zf: zf.extractall(spark_files_dir)
+
+            directory = tempfile.gettempdir()
+            targetdir = os.path.abspath(os.path.join(directory, os.path.splitext(filename)[0]))
+            tempdir = targetdir + '-tmp-'+str(random.getrandbits(20) + os.getpid())
+            # Use a double check to make sure we zip only once and while locked
+            if not os.path.exists(targetdir):
+                with FileLock(targetdir):
+                    if not os.path.exists(targetdir):
+                        print "START Unzip {} to {}. split {} pid {}".format(filename, tempdir, split_index, os.getpid())
+                        # Extract the zip to a temporary directory so if something fails we are not stuck
+                        subprocess.Popen('mkdir {1} && unzip -qu {0} -d {1}'.format(os.path.join(spark_files_dir, filename), tempdir), shell = True).communicate()
+
+                        # Extract was a success so we can change to the real folder name
+                        os.rename(tempdir, targetdir)
+                        print "Finished preparing {}".format(targetdir)
+                    else:
+                        print "Target directory found {}".format(targetdir)
+            else:
+                print "Target directory exists {}".format(targetdir)
+            sys.path.append(targetdir)
+
+            #sys.path.append(os.path.join(spark_files_dir, filename))
 
         # fetch names and values of broadcast variables
         num_broadcast_variables = read_int(infile)

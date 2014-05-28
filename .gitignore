@@ -56,3 +56,5 @@ metastore_db/
 metastore/
 warehouse/
 TempStatsStore/
+.vagrant
+Vagrantfile
